@@ -31,7 +31,8 @@ Hidden imports: Let you manually type in any Python modules (separated by commas
 Add data / Add binary: Let you embed external files (like images, configuration files, or external DLLs) into your executable using the source;destination format.
 Note: Files/folders that you add need to be in the same directory as the primary python file
 
-Example: To add 'config.json' to the executeable, use this 'config.json;.' (the dot means to use the root folder of the application)
+Example: To add 'config.json' to the executeable, use 'config.json;.' (the dot means to use the root folder of the application)
+
 Example: To add a folder named 'images' and its contents, use 'images/;images/'
 
 Extra PyInstaller flags: A text box to type in any other official PyInstaller command-line arguments that aren't built into this GUI.
