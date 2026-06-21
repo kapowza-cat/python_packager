@@ -4,28 +4,7 @@ import shlex
 import threading
 import subprocess
 import tkinter as tk
-from tkinter import filedialog, ttk
-
-try:
-    import PyInstaller.__main__ as pyinstaller_main
-except ImportError:
-    pyinstaller_main = None
-
-
-class TextRedirector:
-    def __init__(self, text_widget):
-        self.text_widget = text_widget
-
-    def write(self, message):
-        if message:
-            self.text_widget.after(0, lambda: self._append(message))
-
-    def flush(self):
-        pass
-
-    def _append(self, message):
-        self.text_widget.insert(tk.END, message)
-        self.text_widget.see(tk.END)
+from tkinter import filedialog, messagebox, ttk
 
 
 class InstallerGUI(tk.Tk):
@@ -95,17 +74,6 @@ class InstallerGUI(tk.Tk):
         button_frame.columnconfigure(1, weight=1)
         row += 1
 
-        log_frame = ttk.LabelFrame(main_frame, text="Build output", padding=8)
-        log_frame.grid(row=row, column=0, columnspan=3, sticky="nsew", pady=(10, 0))
-        log_frame.columnconfigure(0, weight=1)
-        log_frame.rowconfigure(0, weight=1)
-
-        self.output_text = tk.Text(log_frame, width=80, height=18, wrap="word", state="normal")
-        self.output_text.grid(row=0, column=0, sticky="nsew")
-        scrollbar = ttk.Scrollbar(log_frame, orient="vertical", command=self.output_text.yview)
-        scrollbar.grid(row=0, column=1, sticky="ns")
-        self.output_text.configure(yscrollcommand=scrollbar.set)
-
     def _add_labeled_entry(self, parent, label_text, text_variable, row, browse_command=None):
         ttk.Label(parent, text=label_text).grid(row=row, column=0, sticky="w", pady=(6, 0))
         entry = ttk.Entry(parent, textvariable=text_variable, width=72)
@@ -138,7 +106,6 @@ class InstallerGUI(tk.Tk):
             self.icon_var.set(path)
 
     def on_build(self):
-        self.output_text.delete("1.0", tk.END)
         self.disable_controls(True)
         thread = threading.Thread(target=self.run_build, daemon=True)
         thread.start()
@@ -160,12 +127,12 @@ class InstallerGUI(tk.Tk):
     def run_build(self):
         script_path = self.script_var.get().strip()
         if not script_path:
-            self.log_error("Error: Script path is required.\n")
+            self.notify("Build error", "Error: Script path is required.", error=True)
             self.disable_controls(False)
             return
 
         if not os.path.exists(script_path):
-            self.log_error(f"Error: Script not found: {script_path}\n")
+            self.notify("Build error", f"Error: Script not found:\n{script_path}", error=True)
             self.disable_controls(False)
             return
 
@@ -195,7 +162,7 @@ class InstallerGUI(tk.Tk):
             if os.path.exists(icon_path):
                 args.extend(["--icon", icon_path])
             else:
-                self.log_error(f"Warning: Icon file not found, ignoring: {icon_path}\n")
+                self.notify("Build warning", f"Icon file not found, ignoring:\n{icon_path}")
 
         dist_path = self.dist_var.get().strip()
         if dist_path:
@@ -218,20 +185,21 @@ class InstallerGUI(tk.Tk):
             try:
                 args.extend(shlex.split(extra))
             except ValueError as error:
-                self.log_error(f"Error parsing extra flags: {error}\n")
+                self.notify("Build error", f"Error parsing extra flags:\n{error}", error=True)
                 self.disable_controls(False)
                 return
 
         args.append(script_path)
-        self.log_info(f"Running PyInstaller with arguments:\n  {' '.join(shlex.quote(arg) for arg in args)}\n\n")
 
         try:
             self.build_with_pyinstaller(args)
-            self.log_info("\nBuild completed. Check the dist folder for the generated executable.\n")
+            self.notify("Build completed", "PyInstaller finished successfully. Check the dist folder for the generated executable.")
         except subprocess.CalledProcessError as exc:
-            self.log_error(f"Build failed: {exc}\n")
+            self.notify("Build failed", f"PyInstaller exited with error code {exc.returncode}.", error=True)
+        except FileNotFoundError as exc:
+            self.notify("Build failed", str(exc), error=True)
         except Exception as exc:
-            self.log_error(f"Unexpected error: {exc}\n")
+            self.notify("Build failed", f"Unexpected error:\n{exc}", error=True)
         finally:
             self.disable_controls(False)
 
@@ -256,28 +224,43 @@ class InstallerGUI(tk.Tk):
                     args.extend([flag, f"{cleaned};."])
 
     def build_with_pyinstaller(self, args):
-        if pyinstaller_main is not None:
-            original_stdout = sys.stdout
-            original_stderr = sys.stderr
-            sys.stdout = TextRedirector(self.output_text)
-            sys.stderr = TextRedirector(self.output_text)
-            try:
-                pyinstaller_main.run(args)
-            finally:
-                sys.stdout = original_stdout
-                sys.stderr = original_stderr
+        python_command = self.find_python_command()
+        command = python_command + ["-m", "PyInstaller"] + args
+        #self.notify("Build started", "Build output will appear in a new terminal window.")
+
+        if os.name == "nt":
+            CREATE_NEW_CONSOLE = 0x00000010
+            subprocess.run(command, check=True, creationflags=CREATE_NEW_CONSOLE)
         else:
-            command = [sys.executable, "-m", "PyInstaller"] + args
-            self.log_info(f"PyInstaller module not available in embedded environment; executing: {' '.join(shlex.quote(p) for p in command)}\n")
             subprocess.run(command, check=True)
 
-    def log_info(self, message):
-        self.output_text.insert(tk.END, message)
-        self.output_text.see(tk.END)
+    def find_python_command(self):
+        if not getattr(sys, "frozen", False):
+            return [sys.executable]
 
-    def log_error(self, message):
-        self.output_text.insert(tk.END, message)
-        self.output_text.see(tk.END)
+        base_exec = getattr(sys, "_base_executable", None)
+        if base_exec and os.path.basename(base_exec).lower().startswith("python"):
+            return [base_exec]
+
+        candidates = [["py", "-3"], ["python"], ["py"]]
+        for candidate in candidates:
+            if self._is_valid_python_command(candidate):
+                return candidate
+
+        raise FileNotFoundError("No Python interpreter found on PATH. Install Python and ensure it is available in PATH.")
+
+    def _is_valid_python_command(self, candidate):
+        try:
+            subprocess.run(candidate + ["-c", "import sys"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            return True
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+            return False
+
+    def notify(self, title, message, error=False):
+        if error:
+            self.after(0, lambda: messagebox.showerror(title, message))
+        else:
+            self.after(0, lambda: messagebox.showinfo(title, message))
 
 
 if __name__ == "__main__":
