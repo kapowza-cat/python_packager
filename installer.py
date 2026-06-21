@@ -159,10 +159,13 @@ class InstallerGUI(tk.Tk):
 
         icon_path = self.icon_var.get().strip()
         if icon_path:
-            if os.path.exists(icon_path):
+            icon_path = os.path.normpath(os.path.abspath(os.path.expanduser(icon_path)))
+            if os.path.isfile(icon_path):
+                if os.name == "nt" and not icon_path.lower().endswith(".ico"):
+                    self.notify("Build warning", "Windows icon files should use the .ico extension.", error=False)
                 args.extend(["--icon", icon_path])
             else:
-                self.notify("Build warning", f"Icon file not found, ignoring:\n{icon_path}")
+                self.notify("Build warning", f"Icon file not found or not a file, ignoring:\n{icon_path}")
 
         dist_path = self.dist_var.get().strip()
         if dist_path:
